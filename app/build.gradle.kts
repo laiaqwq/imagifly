@@ -64,6 +64,9 @@ android {
     buildConfig = true
   }
   testOptions { unitTests { isIncludeAndroidResources = true } }
+  androidResources {
+    noCompress += listOf("mp4", "webp")
+  }
   dependenciesInfo {
     includeInApk = false
     includeInBundle = true

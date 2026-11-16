@@ -9,6 +9,7 @@ import androidx.lifecycle.viewModelScope
 import com.example.network.NetworkConnectivityObserver
 import com.example.network.NetworkStatusSnapshot
 import com.example.network.TransportType
+import com.example.webview.BundledAssetInterceptor
 import java.io.File
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -81,9 +82,11 @@ data class OfflineArchiveInfo(
 )
 
 data class ImagiflyUiState(
-    val homeUrl: String = "https://imagifly.net/",
-    val currentUrl: String = "https://imagifly.net/",
+    val homeUrl: String = BundledAssetInterceptor.resolveDirectHomeUrl(),
+    val currentUrl: String = BundledAssetInterceptor.resolveDirectHomeUrl(),
     val pageTitle: String = "Imagifly",
+    val isFirstLaunch: Boolean = true,
+    val isInitialLaunchLoading: Boolean = true,
     val isLoading: Boolean = true,
     val loadProgress: Int = 0,
     val canGoBack: Boolean = false,
@@ -109,8 +112,16 @@ class ImagiflyViewModel(
     private val connectivityObserver: NetworkConnectivityObserver
 ) : ViewModel() {
 
+    private val prefs = appContext.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+    private val isFirstLaunchFlag = !prefs.getBoolean(KEY_FIRST_LAUNCH_COMPLETED, false)
+    private val initialHomeUrl = BundledAssetInterceptor.resolveDirectHomeUrl()
+
     private val _uiState = MutableStateFlow(
         ImagiflyUiState(
+            homeUrl = initialHomeUrl,
+            currentUrl = initialHomeUrl,
+            isFirstLaunch = isFirstLaunchFlag,
+            isInitialLaunchLoading = true,
             networkStatus = connectivityObserver.getCurrentStatus()
         )
     )
@@ -160,6 +171,15 @@ class ImagiflyViewModel(
         }
     }
 
+    fun onTitleReceived(title: String?) {
+        val cleanTitle = title?.takeIf {
+            it.isNotBlank() &&
+                !it.contains("Webpage not available", ignoreCase = true) &&
+                !it.contains("找不到网页")
+        } ?: return
+        _uiState.update { it.copy(pageTitle = cleanTitle) }
+    }
+
     fun onPageFinished(url: String?, title: String?, canGoBack: Boolean, canGoForward: Boolean) {
         val safeUrl = url ?: _uiState.value.currentUrl
         val cleanTitle = title?.takeIf {
@@ -168,11 +188,14 @@ class ImagiflyViewModel(
                 !it.contains("找不到网页")
         } ?: "Imagifly"
 
+        markFirstLaunchCompleted()
+
         _uiState.update { state ->
             state.copy(
                 currentUrl = if (safeUrl.startsWith("file://")) state.homeUrl else safeUrl,
                 pageTitle = cleanTitle,
                 isLoading = false,
+                isInitialLaunchLoading = false,
                 loadProgress = 100,
                 canGoBack = canGoBack,
                 canGoForward = canGoForward
@@ -209,6 +232,7 @@ class ImagiflyViewModel(
         _uiState.update { state ->
             state.copy(
                 isLoading = false,
+                isInitialLaunchLoading = false,
                 activeError = WebPageError(
                     category = category,
                     errorCode = errorCode,
@@ -226,6 +250,7 @@ class ImagiflyViewModel(
                 state.copy(
                     isSimulatingError = true,
                     isLoading = false,
+                    isInitialLaunchLoading = false,
                     activeError = WebPageError(
                         category = WebErrorCategory.SIMULATED_DRILL,
                         errorCode = -106,
@@ -339,6 +364,12 @@ class ImagiflyViewModel(
         }
     }
 
+    private fun markFirstLaunchCompleted() {
+        if (!prefs.getBoolean(KEY_FIRST_LAUNCH_COMPLETED, false)) {
+            prefs.edit().putBoolean(KEY_FIRST_LAUNCH_COMPLETED, true).apply()
+        }
+    }
+
     private fun calculateDirectorySize(dir: File?): Long {
         if (dir == null || !dir.exists()) return 0L
         var result = 0L
@@ -366,5 +397,10 @@ class ImagiflyViewModel(
                 connectivityObserver = NetworkConnectivityObserver(appContext)
             ) as T
         }
+    }
+
+    companion object {
+        private const val PREFS_NAME = "imagifly_prefs"
+        private const val KEY_FIRST_LAUNCH_COMPLETED = "first_launch_completed"
     }
 }

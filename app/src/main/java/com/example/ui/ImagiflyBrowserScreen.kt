@@ -47,13 +47,16 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.example.network.TransportType
 import com.example.ui.components.CacheSettingsSheet
 import com.example.ui.components.NetworkErrorOverlay
+import com.example.ui.components.StartupLoadingOverlay
 import com.example.ui.theme.Cyan400
 import com.example.ui.theme.Slate800
 import com.example.ui.theme.Slate950
 import com.example.viewmodel.CachePolicyMode
 import com.example.viewmodel.ImagiflyViewModel
+import com.example.webview.BundledAssetInterceptor
 import java.io.File
 
 @SuppressLint("SetJavaScriptEnabled")
@@ -98,6 +101,14 @@ fun ImagiflyBrowserScreen(
             isOnline = uiState.networkStatus.isOnline
         )
         webViewRef?.settings?.cacheMode = resolvedMode
+    }
+
+    // Staged image loading on slower cellular networks: release images once HTML/CSS/JS reach 65%
+    LaunchedEffect(uiState.loadProgress, uiState.isLoading) {
+        val wv = webViewRef ?: return@LaunchedEffect
+        if (wv.settings.blockNetworkImage && (!uiState.isLoading || uiState.loadProgress >= 65)) {
+            wv.settings.blockNetworkImage = false
+        }
     }
 
     // Handle system Back press
@@ -148,8 +159,8 @@ fun ImagiflyBrowserScreen(
             AndroidView(
                 modifier = Modifier
                     .fillMaxSize()
-                    // Hide underlying WebView when custom NetworkErrorOverlay is active
-                    .alpha(if (uiState.activeError == null) 1f else 0f)
+                    // Hide underlying WebView when startup splash or custom NetworkErrorOverlay is active
+                    .alpha(if (uiState.activeError == null && !uiState.isInitialLaunchLoading) 1f else 0f)
                     .testTag("imagifly_webview"),
                 factory = { ctx ->
                     WebView(ctx).apply {
@@ -167,12 +178,15 @@ fun ImagiflyBrowserScreen(
                             domStorageEnabled = true
                             databaseEnabled = true
                             loadsImagesAutomatically = true
+                            // On slower cellular connections, prioritize HTML/CSS/JS first before remote images
+                            blockNetworkImage = uiState.networkStatus.transportType == TransportType.CELLULAR
                             useWideViewPort = true
                             loadWithOverviewMode = true
                             setSupportZoom(true)
                             builtInZoomControls = true
                             displayZoomControls = false
                             javaScriptCanOpenWindowsAutomatically = true
+                            mediaPlaybackRequiresUserGesture = false
                             mixedContentMode = WebSettings.MIXED_CONTENT_COMPATIBILITY_MODE
                             allowFileAccess = true
                             allowContentAccess = true
@@ -182,6 +196,17 @@ fun ImagiflyBrowserScreen(
                         }
 
                         webViewClient = object : WebViewClient() {
+                            override fun shouldInterceptRequest(
+                                view: WebView?,
+                                request: WebResourceRequest?
+                            ): WebResourceResponse? {
+                                // Serve bundled hero MP4 video & mobile poster directly from APK assets
+                                BundledAssetInterceptor.interceptIfBundled(ctx, request)?.let {
+                                    return it
+                                }
+                                return super.shouldInterceptRequest(view, request)
+                            }
+
                             override fun shouldOverrideUrlLoading(
                                 view: WebView?,
                                 request: WebResourceRequest?
@@ -209,9 +234,23 @@ fun ImagiflyBrowserScreen(
                                 viewModel.onPageStarted(url)
                             }
 
+                            override fun onPageCommitVisible(view: WebView?, url: String?) {
+                                super.onPageCommitVisible(view, url)
+                                view?.settings?.blockNetworkImage = false
+                                view?.evaluateJavascript(
+                                    BundledAssetInterceptor.LAZY_LOAD_ENFORCEMENT_JS,
+                                    null
+                                )
+                            }
+
                             override fun onPageFinished(view: WebView?, url: String?) {
                                 super.onPageFinished(view, url)
                                 val wv = view ?: return
+                                wv.settings.blockNetworkImage = false
+                                wv.evaluateJavascript(
+                                    BundledAssetInterceptor.LAZY_LOAD_ENFORCEMENT_JS,
+                                    null
+                                )
                                 viewModel.onPageFinished(
                                     url = url,
                                     title = wv.title,
@@ -312,14 +351,7 @@ fun ImagiflyBrowserScreen(
 
                             override fun onReceivedTitle(view: WebView?, title: String?) {
                                 super.onReceivedTitle(view, title)
-                                if (!title.isNullOrBlank()) {
-                                    viewModel.onPageFinished(
-                                        url = view?.url,
-                                        title = title,
-                                        canGoBack = view?.canGoBack() ?: false,
-                                        canGoForward = view?.canGoForward() ?: false
-                                    )
-                                }
+                                viewModel.onTitleReceived(title)
                             }
 
                             override fun onShowFileChooser(
@@ -343,6 +375,13 @@ fun ImagiflyBrowserScreen(
                         loadUrl(uiState.homeUrl)
                     }
                 }
+            )
+
+            // Simple Startup Loading Screen (immediately dismissed once page finishes loading)
+            StartupLoadingOverlay(
+                visible = uiState.isInitialLaunchLoading && uiState.activeError == null,
+                isFirstLaunch = uiState.isFirstLaunch,
+                loadProgress = uiState.loadProgress
             )
 
             // Custom Network Anomaly & Offline Cache Recovery Page Overlay
