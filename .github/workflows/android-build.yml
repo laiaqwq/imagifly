@@ -49,11 +49,26 @@ jobs:
         with:
           gradle-version: "9.3.1"
 
-      - name: Decode debug keystore
+      - name: Ensure debug keystore exists
         run: |
-          if [ ! -f debug.keystore ] && [ -f debug.keystore.base64 ]; then
-            base64 -d debug.keystore.base64 > debug.keystore
+          if [ ! -f debug.keystore ]; then
+            if [ -s debug.keystore.base64 ]; then
+              echo "Decoding debug.keystore from debug.keystore.base64..."
+              base64 -d debug.keystore.base64 > debug.keystore
+            else
+              echo "debug.keystore.base64 not found; generating debug.keystore via keytool..."
+              keytool -genkeypair \
+                -keystore debug.keystore \
+                -storepass android \
+                -alias androiddebugkey \
+                -keypass android \
+                -keyalg RSA \
+                -keysize 2048 \
+                -validity 10000 \
+                -dname "CN=Android Debug,O=Android,C=US"
+            fi
           fi
+          ls -lh debug.keystore
 
       - name: Run unit tests
         run: gradle :app:testDebugUnitTest --no-daemon
