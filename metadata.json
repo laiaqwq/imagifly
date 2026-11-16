@@ -1,0 +1,6 @@
+{
+  "name": "Imagifly",
+  "description": "Android WebView client for imagifly.net featuring intelligent offline cache fallback, network status monitoring, cache management, and custom error recovery UI.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
